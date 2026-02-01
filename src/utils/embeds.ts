@@ -70,7 +70,7 @@ export function buildEventEmbed(event: EventData): EmbedBuilder {
 }
 
 export function getCompletionTitle(event: EventData): string {
-  const base = `МЕРОПРИЯТИЕ «${event.name}» ЗАВЕРШЕНО!`;
+  const base = `МЕРОПРИЯТИЕ ${event.name} ЗАВЕРШЕНО!`;
   if (event.completionType === 'success') return `${base} С УСПЕХОМ ✨`;
   if (event.completionType === 'failure') return `${base} С ПРОВАЛОМ 😔`;
   return base;
@@ -143,6 +143,11 @@ export function buildActionRows(eventId: string): ActionRowBuilder<ButtonBuilder
     .setLabel('Отменить запись')
     .setStyle(ButtonStyle.Danger);
 
+  const pingBtn = new ButtonBuilder()
+    .setCustomId(`event_ping_${eventId}`)
+    .setLabel('ПИНГ!')
+    .setStyle(ButtonStyle.Primary);
+
   const completeBtn = new ButtonBuilder()
     .setCustomId(`event_complete_${eventId}`)
     .setLabel('Завершить')
@@ -151,6 +156,7 @@ export function buildActionRows(eventId: string): ActionRowBuilder<ButtonBuilder
   const row1 = new ActionRowBuilder<ButtonBuilder>().addComponents(
     rejectBtn,
     cancelBtn,
+    pingBtn,
     completeBtn
   );
 
@@ -169,7 +175,11 @@ export function buildActionRows(eventId: string): ActionRowBuilder<ButtonBuilder
       new StringSelectMenuOptionBuilder()
         .setLabel('Настроить ивент')
         .setValue('configure_event')
-        .setDescription('Изменить параметры мероприятия')
+        .setDescription('Изменить параметры мероприятия'),
+      new StringSelectMenuOptionBuilder()
+        .setLabel('Установить таймер')
+        .setValue('set_timer')
+        .setDescription('Обратный отсчёт до напоминания (минуты)')
     );
 
   const row2 = new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(select);

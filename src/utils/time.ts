@@ -12,3 +12,11 @@ export function formatTimeDisplay(normalizedTime: string): string {
   const m = parseInt(parts[1], 10) || 0;
   return `${h}:${String(m).padStart(2, '0')}`;
 }
+
+/** Оставшееся время для таймера: MM:SS (минуты:секунды). */
+export function formatCountdown(remainingMs: number): string {
+  const totalSeconds = Math.max(0, Math.floor(remainingMs / 1000));
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = totalSeconds % 60;
+  return `${minutes}:${String(seconds).padStart(2, '0')}`;
+}

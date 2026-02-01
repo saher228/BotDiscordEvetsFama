@@ -9,7 +9,7 @@ import {
 } from 'discord.js';
 import { loadEvents, getEventByMessageId, setEvent, getActiveEvents } from './store';
 import { normalizeTime } from './utils/time';
-import { EPHEMERAL } from './constants';
+import { EPHEMERAL, MESSAGE_TTL_MS, scheduleMessageDelete } from './constants';
 import { buildEventEmbed, buildActionRows } from './utils/embeds';
 import { data as eventCommandData, execute as eventCommandExecute } from './commands/createEvent';
 import {
@@ -87,7 +87,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
     }
     if (interaction.isModalSubmit()) {
       const c = interaction.customId;
-      const isOurModal = c.startsWith('event_configure_modal_') || c.startsWith('event_reschedule_modal_') || c === 'event_create_modal_1' || c === 'event_create_modal_2';
+      const isOurModal = c.startsWith('event_configure_modal_') || c.startsWith('event_reschedule_modal_') || c.startsWith('event_timer_modal_') || c === 'event_create_modal_1' || c === 'event_create_modal_2';
       if (isOurModal) {
         try {
           await interaction.deferReply(c === 'event_create_modal_2' ? {} : { flags: EPHEMERAL });
@@ -159,10 +159,11 @@ setInterval(async () => {
       if (!channel?.isTextBased() || !('send' in channel)) continue;
 
       const location = event.location || 'место сбора';
-      const groupCode = event.group ? `\n**Код группы:** ${event.group}` : '';
-      await channel.send({
+      const groupCode = event.group ? `\n**Код группы: ${event.group}**` : '';
+      const m = await channel.send({
         content: `<@&${pingRoleId}> **ВСЕ, КТО В СПИСКЕ, СТАКАЕМСЯ НА ${location.toUpperCase()}.**${groupCode}`,
       });
+      scheduleMessageDelete(m, MESSAGE_TTL_MS);
     } catch (e) {
       logger.error('Ошибка отправки напоминания', e);
     }

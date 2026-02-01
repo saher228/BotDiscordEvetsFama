@@ -15,18 +15,82 @@ import {
   deleteEvent,
   generateEventId,
 } from '../store';
-import { EPHEMERAL } from '../constants';
+import { EPHEMERAL, MESSAGE_TTL_MS, scheduleMessageDelete } from '../constants';
 import { EventData } from '../types';
-import { buildEventEmbed, buildActionRows, buildCompletedEventEmbed, buildCompleteSelectMenu, buildExcludeParticipantSelect, getCompletionTitle } from '../utils/embeds';
+import {
+  buildEventEmbed,
+  buildActionRows,
+  buildCompletedEventEmbed,
+  buildCompleteSelectMenu,
+  buildExcludeParticipantSelect,
+  getCompletionTitle,
+} from '../utils/embeds';
 import { isAdmin } from '../utils/admin';
-import { normalizeTime, formatTimeDisplay } from '../utils/time';
+import { normalizeTime, formatTimeDisplay, formatCountdown } from '../utils/time';
 import { GuildMember } from 'discord.js';
 
 const pendingCreates = new Map<string, { name: string; server: string; time: string; participantLimit: number; location: string }>();
 const pendingConfigure = new Map<string, { eventId: string; name: string; server: string; time: string; participantLimit: number; location: string }>();
 
+const activeTimerIntervals = new Map<string, { intervalId: ReturnType<typeof setInterval>; endTime: number }>();
+
 export async function handleModalSubmit(interaction: ModalSubmitInteraction): Promise<void> {
   const customId = interaction.customId;
+
+  if (customId.startsWith('event_timer_modal_')) {
+    const eventId = customId.replace('event_timer_modal_', '');
+    const event = getEvent(eventId);
+    if (!event || event.status !== 'active') {
+      await interaction.editReply({ content: 'Мероприятие не найдено или уже завершено.' });
+      return;
+    }
+    const minutesStr = interaction.fields.getTextInputValue('timer_minutes')?.trim() || '15';
+    const minutes = Math.max(1, Math.min(1440, parseInt(minutesStr, 10) || 15));
+    const endTime = Date.now() + minutes * 60 * 1000;
+    const pingRoleId = process.env.DISCORD_EVENT_PING_ROLE_ID?.trim();
+    const place = event.location?.trim() || 'месте';
+
+    const buildTimerContent = (remainingMs: number): string => {
+      const countdown = formatCountdown(remainingMs);
+      const prefix = pingRoleId ? `<@&${pingRoleId}> ` : '';
+      return `${prefix}**НАЧАЛО ЧЕРЕЗ ${countdown} Мин. «${event.name}» ВСЕМ БЫТЬ НА ${place}**`;
+    };
+
+    try {
+      const channel = await interaction.client.channels.fetch(event.channelId);
+      if (!channel?.isTextBased() || !('send' in channel)) return;
+      const firstContent = buildTimerContent(minutes * 60 * 1000);
+      const msg = await channel.send(firstContent);
+      scheduleMessageDelete(msg, MESSAGE_TTL_MS);
+
+      const intervalId = setInterval(async () => {
+        const remaining = endTime - Date.now();
+        if (remaining <= 0) {
+          activeTimerIntervals.delete(msg.id);
+          clearInterval(intervalId);
+          try {
+            const ch = await interaction.client.channels.fetch(event.channelId);
+            if (ch?.isTextBased() && 'send' in ch) {
+              const finalPrefix = pingRoleId ? `<@&${pingRoleId}> ` : '';
+              const finalMsg = await ch.send(`${finalPrefix}**ВРЕМЯ ВЫШЛО! СТАРТУЕМ ${event.name} НА ${place}**`);
+              scheduleMessageDelete(finalMsg, MESSAGE_TTL_MS);
+            }
+          } catch (_) {}
+          return;
+        }
+        try {
+          await msg.edit(buildTimerContent(remaining));
+        } catch (_) {}
+      }, 2000);
+      activeTimerIntervals.set(msg.id, { intervalId, endTime });
+      await interaction.deleteReply();
+    } catch (_) {
+      await interaction.editReply({
+        content: 'Не удалось отправить сообщение с таймером в канал.',
+      });
+    }
+    return;
+  }
 
   if (customId.startsWith('event_configure_modal_2_')) {
     const eventId = customId.replace('event_configure_modal_2_', '');
@@ -54,7 +118,7 @@ export async function handleModalSubmit(interaction: ModalSubmitInteraction): Pr
     event.group = group || undefined;
     event.map = map || undefined;
     event.color = colorRaw || undefined;
-    event.colorSetByUser = colorRaw.length > 0 || event.colorSetByUser;
+    event.colorSetByUser = colorRaw.length > 0 || !!event.colorSetByUser;
     setEvent(event);
 
     const embed = buildEventEmbed(event);
@@ -72,9 +136,10 @@ export async function handleModalSubmit(interaction: ModalSubmitInteraction): Pr
       }
       if (pingRoleId && oldTime !== event.time) {
         if (channel?.isTextBased() && 'send' in channel) {
-          await channel.send({
+          const m = await channel.send({
             content: `<@&${pingRoleId}> **ПЕРЕНОС ВРЕМЕНИ НА ${formatTimeDisplay(event.time)}**`,
           });
+          scheduleMessageDelete(m, MESSAGE_TTL_MS);
         }
       }
     } catch (_) {}
@@ -130,7 +195,7 @@ export async function handleModalSubmit(interaction: ModalSubmitInteraction): Pr
     const embed = buildEventEmbed(event);
     const rows = buildActionRows(event.id);
     await interaction.editReply({
-      content: `Время мероприятия обновлено на **${newTime}**`,
+      content: `Время мероприятия обновлено на **${formatTimeDisplay(newTime)}**`,
     });
     try {
       const msg = await interaction.channel?.messages.fetch(event.messageId!);
@@ -141,9 +206,10 @@ export async function handleModalSubmit(interaction: ModalSubmitInteraction): Pr
       try {
         const channel = await interaction.client.channels.fetch(event.channelId);
         if (channel?.isTextBased() && 'send' in channel) {
-          await channel.send({
+          const m = await channel.send({
             content: `<@&${pingRoleId}> **ПЕРЕНОС ВРЕМЕНИ НА ${formatTimeDisplay(newTime)}**`,
           });
+          scheduleMessageDelete(m, MESSAGE_TTL_MS);
         }
       } catch (_) {}
     }
@@ -206,48 +272,61 @@ export async function handleModalSubmit(interaction: ModalSubmitInteraction): Pr
       channelId: interaction.channelId!,
       createdAt: Date.now(),
     };
-
     setEvent(event);
 
     const embed = buildEventEmbed(event);
     const rows = buildActionRows(event.id);
-
     const pingRoleId = process.env.DISCORD_EVENT_PING_ROLE_ID?.trim();
-    const content = pingRoleId ? `<@&${pingRoleId}> Новое мероприятие **${event.name}**!` : undefined;
+    const messageContent = pingRoleId ? `<@&${pingRoleId}> Новое мероприятие **${event.name}**!` : undefined;
 
     await interaction.editReply({
-      content: content ?? undefined,
-      embeds: [embed],
-      components: rows,
+      content: `Мероприятие **${event.name}** создано.`,
     });
-    const msg = await interaction.fetchReply();
-    event.messageId = msg.id;
-    setEvent(event);
+    try {
+      const channel = await interaction.channel;
+      if (channel?.isTextBased() && 'send' in channel) {
+        const msg = await channel.send({
+          content: messageContent,
+          embeds: [embed],
+          components: rows,
+        });
+        event.messageId = msg.id;
+        setEvent(event);
+      }
+    } catch (_) {}
     return;
   }
 }
 
 export async function handleButton(interaction: ButtonInteraction): Promise<void> {
   if (interaction.customId === 'event_create_step2') {
+    const pending = pendingCreates.get(interaction.user.id);
+    if (!pending) {
+      await interaction.reply({
+        content: 'Сессия истекла. Начните с /event create.',
+        flags: EPHEMERAL,
+      });
+      return;
+    }
     const modal = new ModalBuilder()
       .setCustomId('event_create_modal_2')
       .setTitle('Создание мероприятия (шаг 2/2)');
     const colorInput = new TextInputBuilder()
       .setCustomId('event_color')
       .setLabel('Цвет / дресс-код')
-      .setPlaceholder('фиолетовый, purple, быть в фиолетовой одежде')
+      .setPlaceholder('purple, фиолетовый (необязательно)')
       .setStyle(TextInputStyle.Short)
       .setRequired(false);
     const groupInput = new TextInputBuilder()
       .setCustomId('event_group')
       .setLabel('Код группы')
-      .setPlaceholder('ABC123')
+      .setPlaceholder('ABC-123')
       .setStyle(TextInputStyle.Short)
       .setRequired(false);
     const mapInput = new TextInputBuilder()
       .setCustomId('event_map')
       .setLabel('Карта')
-      .setPlaceholder('Название карты')
+      .setPlaceholder('Карта (необязательно)')
       .setStyle(TextInputStyle.Short)
       .setRequired(false);
     modal.addComponents(
@@ -337,6 +416,11 @@ export async function handleButton(interaction: ButtonInteraction): Promise<void
     await interaction.editReply({
       content: 'Вы добавлены в основной состав!',
     });
+    try {
+      const embed = buildEventEmbed(event);
+      const rows = buildActionRows(event.id);
+      await interaction.message.edit({ embeds: [embed], components: rows });
+    } catch (_) {}
   } else if (interaction.customId.startsWith('event_cancel_')) {
     const inMain = event.mainRoster.indexOf(userId);
     if (inMain >= 0) {
@@ -351,6 +435,50 @@ export async function handleButton(interaction: ButtonInteraction): Promise<void
       });
       return;
     }
+    try {
+      const embed = buildEventEmbed(event);
+      const rows = buildActionRows(event.id);
+      await interaction.message.edit({ embeds: [embed], components: rows });
+    } catch (_) {}
+  } else if (interaction.customId.startsWith('event_ping_')) {
+    if (!interaction.guild) {
+      await interaction.editReply({ content: 'Ошибка.' });
+      return;
+    }
+    const member = interaction.member instanceof GuildMember
+      ? interaction.member
+      : await interaction.guild.members.fetch(userId);
+    if (!await isAdmin(member, userId)) {
+      await interaction.editReply({
+        content: 'Только администраторы могут отправлять пинг.',
+      });
+      return;
+    }
+    const pingRoleId = process.env.DISCORD_EVENT_PING_ROLE_ID?.trim();
+    const place = event.location?.trim() || 'месте';
+    const groupCode = event.group ? `\n**КОД ГРУППЫ: ${event.group}**` : '';
+
+    let timerInfo = '';
+    for (const [, timerData] of activeTimerIntervals.entries()) {
+      const remaining = timerData.endTime - Date.now();
+      if (remaining > 0) {
+        timerInfo = `\n**НАЧАЛО ЧЕРЕЗ: ${formatCountdown(remaining)} Мин.**`;
+        break;
+      }
+    }
+
+    const content = pingRoleId
+      ? `<@&${pingRoleId}> **${event.name} ВСЕМ БЫТЬ НА ${place} ${timerInfo}${groupCode}**`
+      : `**${event.name} ВСЕМ БЫТЬ НА ${place} ${timerInfo}${groupCode}**`;
+    try {
+      const channel = await interaction.client.channels.fetch(event.channelId);
+      if (channel?.isTextBased() && 'send' in channel) {
+        const m = await channel.send({ content });
+        scheduleMessageDelete(m, MESSAGE_TTL_MS);
+      }
+      await interaction.deleteReply();
+    } catch (_) {}
+    return;
   } else if (interaction.customId.startsWith('event_complete_')) {
     if (!interaction.guild) {
       await interaction.editReply({ content: 'Ошибка.' });
@@ -529,6 +657,16 @@ export async function handleSelectMenu(interaction: StringSelectMenuInteraction)
 
   if (value === 'configure_event') {
     if (!interaction.guild) return;
+    const member = interaction.member instanceof GuildMember
+      ? interaction.member
+      : await interaction.guild.members.fetch(userId);
+    if (!await isAdmin(member, userId)) {
+      await interaction.reply({
+        content: 'Только администраторы могут настраивать мероприятие.',
+        flags: EPHEMERAL,
+      });
+      return;
+    }
     const modal = new ModalBuilder()
       .setCustomId(`event_configure_modal_1_${event.id}`)
       .setTitle('Настройка мероприятия (шаг 1/2)');
@@ -569,6 +707,35 @@ export async function handleSelectMenu(interaction: StringSelectMenuInteraction)
       new ActionRowBuilder<TextInputBuilder>().addComponents(timeInput),
       new ActionRowBuilder<TextInputBuilder>().addComponents(limitInput),
       new ActionRowBuilder<TextInputBuilder>().addComponents(locationInput)
+    );
+    await interaction.showModal(modal);
+    return;
+  }
+
+  if (value === 'set_timer') {
+    if (!interaction.guild) return;
+    const member = interaction.member instanceof GuildMember
+      ? interaction.member
+      : await interaction.guild.members.fetch(userId);
+    if (!await isAdmin(member, userId)) {
+      await interaction.reply({
+        content: 'Только администраторы могут устанавливать таймер.',
+        flags: EPHEMERAL,
+      });
+      return;
+    }
+    const modal = new ModalBuilder()
+      .setCustomId(`event_timer_modal_${event.id}`)
+      .setTitle('Таймер напоминания');
+    const minutesInput = new TextInputBuilder()
+      .setCustomId('timer_minutes')
+      .setLabel('Минуты')
+      .setPlaceholder('15')
+      .setStyle(TextInputStyle.Short)
+      .setValue('15')
+      .setRequired(true);
+    modal.addComponents(
+      new ActionRowBuilder<TextInputBuilder>().addComponents(minutesInput)
     );
     await interaction.showModal(modal);
     return;
