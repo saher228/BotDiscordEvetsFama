@@ -159,9 +159,9 @@ setInterval(async () => {
       if (!channel?.isTextBased() || !('send' in channel)) continue;
 
       const location = event.location || 'место сбора';
-      const groupCode = event.group ? `\n**Код группы: ${event.group}**` : '';
+      const groupCode = event.group ? `\n**КОД ГРУППЫ: ${event.group}**` : '';
       const m = await channel.send({
-        content: `<@&${pingRoleId}> **ВСЕ, КТО В СПИСКЕ, СТАКАЕМСЯ НА ${location.toUpperCase()}.**${groupCode}`,
+        content: `<@&${pingRoleId}> **ВСЕ, КТО В СПИСКЕ, СТАКАЕМСЯ НА ${location.toUpperCase()}. ${groupCode}**`,
       });
       scheduleMessageDelete(m, MESSAGE_TTL_MS);
     } catch (e) {
