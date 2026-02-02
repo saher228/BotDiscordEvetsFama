@@ -456,7 +456,7 @@ export async function handleButton(interaction: ButtonInteraction): Promise<void
     }
     const pingRoleId = process.env.DISCORD_EVENT_PING_ROLE_ID?.trim();
     const place = event.location?.trim() || 'месте';
-    const groupCode = event.group ? `\n**КОД ГРУППЫ: ${event.group}**` : '';
+    const groupCode = event.group ? `\n**КОД ГРУППЫ:** ${event.group}` : '';
 
     let timerInfo = '';
     for (const [, timerData] of activeTimerIntervals.entries()) {

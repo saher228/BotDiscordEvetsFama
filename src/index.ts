@@ -90,12 +90,11 @@ client.on(Events.InteractionCreate, async (interaction) => {
       const isOurModal = c.startsWith('event_configure_modal_') || c.startsWith('event_reschedule_modal_') || c.startsWith('event_timer_modal_') || c === 'event_create_modal_1' || c === 'event_create_modal_2';
       if (isOurModal) {
         try {
-          await interaction.deferReply(c === 'event_create_modal_2' ? {} : { flags: EPHEMERAL });
+          await interaction.deferReply({ flags: EPHEMERAL });
         } catch (deferErr: unknown) {
-          const code = (deferErr as { code?: number })?.code;
           const isNetwork = (deferErr as { code?: string })?.code === 'UND_ERR_SOCKET' || (deferErr as Error)?.message?.includes('other side closed');
           if (isNetwork) {
-            try { await interaction.deferReply(c === 'event_create_modal_2' ? {} : { flags: EPHEMERAL }); } catch { throw deferErr; }
+            try { await interaction.deferReply({ flags: EPHEMERAL }); } catch { throw deferErr; }
           } else {
             throw deferErr;
           }
@@ -159,7 +158,7 @@ setInterval(async () => {
       if (!channel?.isTextBased() || !('send' in channel)) continue;
 
       const location = event.location || 'место сбора';
-      const groupCode = event.group ? `\n**КОД ГРУППЫ: ${event.group}**` : '';
+      const groupCode = event.group ? `\n**КОД ГРУППЫ:** ${event.group}` : '';
       const m = await channel.send({
         content: `<@&${pingRoleId}> **ВСЕ, КТО В СПИСКЕ, СТАКАЕМСЯ НА ${location.toUpperCase()}. ${groupCode}**`,
       });
